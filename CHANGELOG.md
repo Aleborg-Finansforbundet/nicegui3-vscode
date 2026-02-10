@@ -1,5 +1,14 @@
 # Changelog
 
+### 0.9.8
+
+- Fix extension activation crash: `Cannot read properties of undefined (reading 'extensionUri')`
+- Fix asset loading path resolution to support both build layouts:
+  - TypeScript output (`out/providers/*.js`)
+  - esbuild bundle output (`out/extension.js`)
+- Fix startup error when loading metadata files (`ENOENT ... out/assets/quasar_components.json`)
+- Restore props/classes/style suggestions by removing an over-restrictive Pylance hover gate in completions
+
 ### 0.9.7
 
 - Add compatibility improvements for NiceGUI 3.7.1 and newer Pylance hover response formats

@@ -1,13 +1,25 @@
 import * as fs from 'node:fs';
-import * as vscode from 'vscode';
+import * as path from 'node:path';
 
-function get_extension_uri(...paths: string[]) {
-	return vscode.Uri.joinPath(vscode.extensions.getExtension('DaelonSuzuka.nicegui').extensionUri, ...(paths ?? ''));
+function get_asset_path(file: string) {
+	// Support both build layouts:
+	// 1) tsc output: out/providers/data.js  -> ../../assets
+	// 2) esbuild bundle: out/extension.js  -> ../assets
+	const candidates = [
+		path.resolve(__dirname, '..', '..', 'assets', file),
+		path.resolve(__dirname, '..', 'assets', file),
+	];
+	for (const candidate of candidates) {
+		if (fs.existsSync(candidate)) {
+			return candidate;
+		}
+	}
+	return candidates[0];
 }
 
 function load(file: string) {
-	const uri = get_extension_uri('assets', file);
-	return JSON.parse(fs.readFileSync(uri.fsPath).toString());
+	const assetPath = get_asset_path(file);
+	return JSON.parse(fs.readFileSync(assetPath, 'utf-8'));
 }
 
 export function flatten(item: string | string[] | JSONValue, join: string): string {
