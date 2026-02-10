@@ -245,11 +245,6 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 			return items;
 		}
 
-		// pylance will return null for hovers on string literals
-		if ((await this.pylance.request_hover(document, position)) !== null) {
-			return undefined;
-		}
-
 		const ctx = capture_document_context(document, position);
 		// log.debug('context:', ctx);
 

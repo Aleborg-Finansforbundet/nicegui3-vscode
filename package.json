@@ -2,7 +2,7 @@
 	"name": "nicegui-3",
 	"displayName": "NiceGUI 3",
 	"icon": "icon.png",
-	"version": "0.9.7",
+	"version": "0.9.8",
 	"description": "Language support for the NiceGUI framework",
 	"repository": {
 		"type": "git",
@@ -12,8 +12,8 @@
 		"url": "https://github.com/daelonsuzuka/nicegui-vscode/issues"
 	},
 	"license": "MIT",
-	"author": "DaelonSuzuka",
-	"publisher": "DaelonSuzuka",
+	"author": "daelonsuzuka",
+	"publisher": "daelonsuzuka",
 	"engines": {
 		"vscode": "^1.109.0"
 	},
