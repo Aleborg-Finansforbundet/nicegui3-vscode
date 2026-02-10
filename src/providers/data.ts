@@ -67,5 +67,7 @@ export interface QuasarGenericLists {
 
 export const quasarLists: QuasarGenericLists = load('quasar_lists.json');
 export const tailwindClasses: string[] = load('tailwind_classes.json');
+export const niceguiFunctions: string[] = load('nicegui_functions.json');
+export const niceguiToQuasarMap: { [k: string]: string } = load('nicegui_to_quasar_map.json');
 
 export const materialIcons: string[] = load('material_icons.json')

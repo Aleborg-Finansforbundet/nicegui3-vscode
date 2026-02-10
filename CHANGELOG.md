@@ -1,5 +1,27 @@
 # Changelog
 
+### 0.9.7
+
+- Add compatibility improvements for NiceGUI 3.7.1 and newer Pylance hover response formats
+- Fix hover/completion crash caused by null hover payloads (`Cannot read properties of null (reading 'match')`)
+- Add auto-generated NiceGUI metadata pipeline (`tools/gather_nicegui_data.py`) and new assets for:
+  - `ui.*` function completions
+  - explicit NiceGUI class to Quasar component mapping
+- Improve class resolution by preferring generated NiceGUI->Quasar mapping before fallback name conversion
+- Update Quasar metadata to Quasar 2.18.5 and make metadata generation support both:
+  - legacy `../quasar/ui/src`
+  - npm `node_modules/quasar/dist/api` (or `QUASAR_API_DIR`)
+- Add `.style()` completions (CSS properties and common values)
+- Extend completion context detection to also support:
+  - `default_props(...)`
+  - `default_classes(...)`
+  - `default_style(...)` and `default_styles(...)`
+- Add NiceGUI snippets (`ngapp`, `ngpage`, `ngbutton`, `ngcard`, `ngrefresh`)
+- Add maintenance scripts:
+  - `npm run sync:nicegui-data`
+  - `npm run sync:quasar-data`
+
+
 ### 0.9.5
 
 - Replace icon list generator with new one provided by @evnchn (thanks!)

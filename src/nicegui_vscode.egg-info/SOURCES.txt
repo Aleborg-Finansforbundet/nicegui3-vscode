@@ -1,0 +1,8 @@
+LICENSE
+README.md
+pyproject.toml
+src/nicegui_vscode.egg-info/PKG-INFO
+src/nicegui_vscode.egg-info/SOURCES.txt
+src/nicegui_vscode.egg-info/dependency_links.txt
+src/nicegui_vscode.egg-info/requires.txt
+src/nicegui_vscode.egg-info/top_level.txt

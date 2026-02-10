@@ -38,15 +38,21 @@ export interface DocumentContext {
 const kinds = {
 	classes: 'classes',
 	props: 'props',
+	default_classes: 'classes',
+	default_props: 'props',
 	add_slot: 'slots',
 	on: 'events',
 	run_method: 'methods',
 	style: 'style',
+	default_style: 'style',
+	default_styles: 'style',
 };
 
 export function capture_document_context(document: TextDocument, position: Position) {
 	const prefix = document.getText().slice(0, document.offsetAt(position));
-	const result = prefix.match(/\.\s*(props|classes|style|on|run_method|add_slot)\s*\(\s*[^\)]+$/);
+	const result = prefix.match(
+		/\.\s*(props|classes|style|on|run_method|add_slot|default_props|default_classes|default_style|default_styles)\s*\(\s*[^\)]+$/,
+	);
 
 	if (!result) {
 		const icon = prefix.match(/(icon)=['"]\w*$/);

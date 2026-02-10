@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Position, TextDocument } from 'vscode';
+import { niceguiToQuasarMap } from './data';
 
 export interface TextDocumentPositionParams {
 	textDocument: { uri: string };
@@ -8,6 +9,52 @@ export interface TextDocumentPositionParams {
 
 export class PylanceAdapter {
 	pylance = vscode.extensions.getExtension('ms-python.vscode-pylance');
+
+	private normalize_hover_contents(contents: unknown): string | null {
+		if (!contents) {
+			return null;
+		}
+		if (typeof contents === 'string') {
+			return contents;
+		}
+		if (Array.isArray(contents)) {
+			const parts: string[] = [];
+			for (const part of contents) {
+				if (typeof part === 'string') {
+					parts.push(part);
+					continue;
+				}
+				if (
+					part !== null &&
+					typeof part === 'object' &&
+					'value' in part &&
+					typeof (part as { value: unknown }).value === 'string'
+				) {
+					parts.push((part as { value: string }).value);
+				}
+			}
+			return parts.length > 0 ? parts.join('\n') : null;
+		}
+		if (
+			contents !== null &&
+			typeof contents === 'object' &&
+			'value' in contents &&
+			typeof (contents as { value: unknown }).value === 'string'
+		) {
+			return (contents as { value: string }).value;
+		}
+		return null;
+	}
+
+	private first_match(body: string, patterns: RegExp[]): string | null {
+		for (const pattern of patterns) {
+			const match = body.match(pattern);
+			if (match?.[1]) {
+				return match[1];
+			}
+		}
+		return null;
+	}
 
 	async get_client() {
 		if (!this.pylance?.isActive) {
@@ -31,7 +78,7 @@ export class PylanceAdapter {
 			position: position,
 		};
 		const response = await this.send_request('textDocument/hover', location);
-		return response?.contents?.value ?? null;
+		return this.normalize_hover_contents(response?.contents);
 	}
 
 	async request_type(document: TextDocument, position: Position): Promise<string | null> {
@@ -52,54 +99,69 @@ export class PylanceAdapter {
 
 	async determine_class(document: TextDocument, kind: string, offset: number): Promise<string | null> {
 		const possibleClass = await this._determine_class(document, kind, offset);
-		let className = null;
-		if (possibleClass) {
-			// Convert NiceGUI types to Quasar types
-			className = `Q${possibleClass}`;
-			className = className.replace('Button', 'Btn');
-			className = className.replace('Image', 'Img');
-			className = className.toLowerCase();
+		if (!possibleClass) {
+			return null;
 		}
-		return className;
+
+		// Prefer exact mappings extracted from installed NiceGUI.
+		const mappedClass = niceguiToQuasarMap[possibleClass];
+		if (mappedClass) {
+			return mappedClass;
+		}
+
+		// Fallback for unmapped classes.
+		let className = `Q${possibleClass}`;
+		className = className.replace('Button', 'Btn');
+		className = className.replace('Image', 'Img');
+		return className.toLowerCase();
 	}
 
 	async _determine_class(document: TextDocument, kind: string, offset: number) {
 		if (['classes', 'props', 'style', 'events'].includes(kind)) {
 			const body = await this.request_hover(document, document.positionAt(offset + 1));
+			if (!body) {
+				return null;
+			}
 			if (['classes', 'props', 'style'].includes(kind)) {
-				const match = body.match(
-					/\(property\) (?:classes|props|style): (?:Classes|Props|Style)\[(?:Self@)?([\w_]+)\]/,
-				);
-				if (match) {
-					return match[1];
-				}
-			} else if (['events'].includes(kind)) {
-				const match = body.match(/\(method\) def on\([^\)]*\) -> (\w+)/m);
-				if (match) {
-					return match[1];
-				}
+				return this.first_match(body, [
+					/\(property\)\s+(?:classes|props|style):\s+(?:Classes|Props|Style)\[(?:Self@)?([\w_]+)\]/,
+					/(?:classes|props|style):\s+(?:Classes|Props|Style)\[(?:Self@)?([\w_]+)\]/,
+					/(?:classes|props|style):\s+\w*\[(?:Self@)?([\w_]+)\]/,
+				]);
 			}
-		} else {
-			// log.debug("other");
+			if (['events'].includes(kind)) {
+				return this.first_match(body, [
+					/\(method\)\s+def on\([^\)]*\)\s*->\s*([\w_]+)/m,
+					/def on\([^\)]*\)\s*->\s*([\w_]+)/m,
+				]);
+			}
+		}
 
-			//TODO: fix this awful mess
-			const body1 = await this.request_hover(document, document.positionAt(offset - 1));
-			// log.debug("body1", body1);
-			if (body1) {
-				const match = body1.match(/\(variable\) [\w_]*: ([\w_]+)/);
-				// log.debug("match1", match);
-				if (match) {
-					return match[1];
-				}
+		// TODO: fix this awful mess
+		const body1 = await this.request_hover(document, document.positionAt(offset - 1));
+		// log.debug("body1", body1);
+		if (body1) {
+			const variableClass = this.first_match(body1, [
+				/\(variable\)\s+[\w_]*:\s+([\w_]+)/,
+				/\(variable\)\s+[\w_]*:\s+[\w_]+\[([\w_]+)\]/,
+				/:\s+([\w_]+)$/,
+			]);
+			// log.debug("match1", match);
+			if (variableClass) {
+				return variableClass;
 			}
-			const body2 = await this.request_hover(document, document.positionAt(offset - 3));
-			// log.debug("body2", body2);
-			if (body2) {
-				const match = body2.match(/class ([\w_]+)\(/);
-				// log.debug("match2", match);
-				if (match) {
-					return match[1];
-				}
+		}
+
+		const body2 = await this.request_hover(document, document.positionAt(offset - 3));
+		// log.debug("body2", body2);
+		if (body2) {
+			const classMatch = this.first_match(body2, [
+				/class\s+([\w_]+)\(/,
+				/->\s+([\w_]+)/,
+			]);
+			// log.debug("match2", match);
+			if (classMatch) {
+				return classMatch;
 			}
 		}
 		return null;
