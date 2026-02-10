@@ -3,6 +3,7 @@
 	"displayName": "NiceGUI 3",
 	"icon": "icon.png",
 	"version": "0.9.8",
+	"version": "0.9.8",
 	"description": "Language support for the NiceGUI framework",
 	"repository": {
 		"type": "git",
