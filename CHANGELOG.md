@@ -1,13 +1,15 @@
 # Changelog
 
-### 0.9.9
+### 0.10.0
 
+- Versioning update: bumped release version to `0.10.0` and corrected/consolidated interim version steps from this fork (`0.9.7`-`0.9.9`) into this release.
 - Fix Pylance connection race in hover/completion integration (avoid `_connection` null crash during startup)
 - Improve provider resilience:
   - add cancellation checks and guarded fallbacks in completion/hover providers
   - avoid provider hard-fail on transient errors
 - Reduce CPU and memory spikes in completions:
   - cap maximum completion items returned for large lists (icons, tailwind, generic values, `ui.*`)
+  - mark truncated completion responses as `isIncomplete` so VS Code requests fresh suggestions while typing
   - add bounded caches for repeated completion item lists and Pylance class/hover lookups
   - reduce document context scan window in hot paths
 - Add new performance settings:
@@ -23,18 +25,14 @@
   - reuse preview webview panel instead of creating many retained panels
   - validate preview URL
   - guard against missing active editor in switch command
-
-### 0.9.8
-
+- Dev/debug quality:
+  - fix extension launch config to use the existing workspace file (`nicegui3.code-workspace`)
 - Fix extension activation crash: `Cannot read properties of undefined (reading 'extensionUri')`
 - Fix asset loading path resolution to support both build layouts:
   - TypeScript output (`out/providers/*.js`)
   - esbuild bundle output (`out/extension.js`)
 - Fix startup error when loading metadata files (`ENOENT ... out/assets/quasar_components.json`)
 - Restore props/classes/style suggestions by removing an over-restrictive Pylance hover gate in completions
-
-### 0.9.7
-
 - Add compatibility improvements for NiceGUI 3.7.1 and newer Pylance hover response formats
 - Fix hover/completion crash caused by null hover payloads (`Cannot read properties of null (reading 'match')`)
 - Add auto-generated NiceGUI metadata pipeline (`tools/gather_nicegui_data.py`) and new assets for:
@@ -53,7 +51,6 @@
 - Add maintenance scripts:
   - `npm run sync:nicegui-data`
   - `npm run sync:quasar-data`
-
 
 ### 0.9.5
 

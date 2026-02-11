@@ -51,6 +51,11 @@ interface CompletionPerformanceSettings {
 	completionTimingLogThresholdMs: number;
 }
 
+interface CompletionBuildResult {
+	items: CompletionItem[];
+	truncated: boolean;
+}
+
 function clamp_positive_int(value: unknown, fallback: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) {
 		return fallback;
@@ -215,7 +220,12 @@ const cssPropertyValues: Record<string, string[]> = {
 	'white-space': ['normal', 'nowrap', 'pre', 'pre-wrap', 'pre-line'],
 };
 
-function build_completions(list: string[], word: string, wordRange: Range, maxItems = DEFAULT_MAX_GENERAL_COMPLETIONS) {
+function build_completions(
+	list: string[],
+	word: string,
+	wordRange: Range,
+	maxItems = DEFAULT_MAX_GENERAL_COMPLETIONS,
+): CompletionBuildResult {
 	if (word === '') {
 		let listCache = emptyCompletionCache.get(list);
 		if (!listCache) {
@@ -224,25 +234,43 @@ function build_completions(list: string[], word: string, wordRange: Range, maxIt
 		}
 		const cached = listCache.get(maxItems);
 		if (cached) {
-			return cached;
+			return {
+				items: cached,
+				truncated: list.length > cached.length,
+			};
 		}
 		const items = list.slice(0, maxItems).map((possible) => new CompletionItem(possible));
 		listCache.set(maxItems, items);
-		return items;
+		return {
+			items,
+			truncated: list.length > items.length,
+		};
 	}
 
 	const items: CompletionItem[] = [];
+	let truncated = false;
 	for (const possible of list) {
 		if (possible.includes(word)) {
 			const item = new CompletionItem(possible);
 			item.range = wordRange;
 			items.push(item);
 			if (items.length >= maxItems) {
+				truncated = true;
 				break;
 			}
 		}
 	}
-	return items;
+	return {
+		items,
+		truncated,
+	};
+}
+
+function completion_response(result: CompletionBuildResult): CompletionItem[] | CompletionList<CompletionItem> {
+	if (result.truncated) {
+		return new CompletionList(result.items, true);
+	}
+	return result.items;
 }
 
 function capture_ui_function_context(document: TextDocument, position: Position) {
@@ -386,10 +414,10 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 					uiContext.wordRange,
 					perf.maxFunctionCompletions,
 				);
-				for (const item of items) {
+				for (const item of items.items) {
 					item.kind = CompletionItemKind.Function;
 				}
-				return finish(items);
+				return finish(completion_response(items));
 			}
 
 			const ctx = capture_document_context(document, position);
@@ -402,7 +430,7 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 			timingKind = ctx.kind;
 
 			if (ctx.kind === 'icons') {
-				return finish(build_completions(materialIcons, ctx.word, ctx.wordRange, perf.maxIconCompletions));
+				return finish(completion_response(build_completions(materialIcons, ctx.word, ctx.wordRange, perf.maxIconCompletions)));
 			}
 
 			// ironically, "classes" doesn't rely on knowing the class
@@ -410,7 +438,9 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 				if (ctx.surround === null) {
 					return finish(undefined);
 				}
-				return finish(build_completions(tailwindClasses, ctx.word, ctx.wordRange, perf.maxTailwindCompletions));
+				return finish(
+					completion_response(build_completions(tailwindClasses, ctx.word, ctx.wordRange, perf.maxTailwindCompletions)),
+				);
 			}
 
 			if (ctx.kind === 'style') {
@@ -511,6 +541,7 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 			}
 
 			const items: CompletionItem[] = [];
+			let isIncomplete = false;
 			const classData = quasarData[className];
 
 			function build_items(kind: 'props' | 'slots' | 'events' | 'methods') {
@@ -522,12 +553,13 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 							if (rawTypedIcon && !icon.toLowerCase().includes(rawTypedIcon)) {
 								continue;
 							}
-							const item = new CompletionItem(icon);
-							items.push(item);
-							if (items.length >= perf.maxIconValueCompletions) {
-								break;
+								const item = new CompletionItem(icon);
+								items.push(item);
+								if (items.length >= perf.maxIconValueCompletions) {
+									isIncomplete = true;
+									break;
+								}
 							}
-						}
 						return;
 					}
 					const attr = classData?.[kind]?.[word];
@@ -538,6 +570,7 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 						const item = new CompletionItem(value.slice(1, -1));
 						items.push(item);
 						if (items.length >= perf.maxAttributeValueCompletions) {
+							isIncomplete = true;
 							break;
 						}
 					}
@@ -559,10 +592,17 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 				build_items(ctx.kind);
 			} else {
 				// log.debug('using full lists');
-				items.push(...build_completions(quasarLists[ctx.kind], ctx.word, ctx.wordRange, perf.maxGeneralCompletions));
+				const result = build_completions(quasarLists[ctx.kind], ctx.word, ctx.wordRange, perf.maxGeneralCompletions);
+				items.push(...result.items);
+				if (result.truncated) {
+					isIncomplete = true;
+				}
 			}
 
 			// log.debug("found ", items.length);
+			if (isIncomplete) {
+				return finish(new CompletionList(items, true));
+			}
 			return finish(items);
 		} catch (error) {
 			log.error('Completion provider failed', error);
