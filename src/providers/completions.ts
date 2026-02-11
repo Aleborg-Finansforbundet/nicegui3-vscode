@@ -28,6 +28,77 @@ import { capture_document_context } from './doc_utils';
 import { PylanceAdapter } from './pylance';
 
 const log = createLogger('completions');
+let emptyCompletionCache: WeakMap<string[], Map<number, CompletionItem[]>> = new WeakMap();
+
+const DEFAULT_MAX_GENERAL_COMPLETIONS = 300;
+const DEFAULT_MAX_ICON_COMPLETIONS = 300;
+const DEFAULT_MAX_TAILWIND_COMPLETIONS = 300;
+const DEFAULT_MAX_ICON_VALUE_COMPLETIONS = 200;
+const DEFAULT_MAX_ATTR_VALUE_COMPLETIONS = 200;
+const DEFAULT_MAX_FUNCTION_COMPLETIONS = 200;
+const DEFAULT_COMPLETION_TIMING_LOG_ENABLED = false;
+const DEFAULT_COMPLETION_TIMING_THRESHOLD_MS = 20;
+const MAX_CONFIG_LIMIT = 2000;
+
+interface CompletionPerformanceSettings {
+	maxGeneralCompletions: number;
+	maxIconCompletions: number;
+	maxTailwindCompletions: number;
+	maxIconValueCompletions: number;
+	maxAttributeValueCompletions: number;
+	maxFunctionCompletions: number;
+	enableCompletionTimingLog: boolean;
+	completionTimingLogThresholdMs: number;
+}
+
+function clamp_positive_int(value: unknown, fallback: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return fallback;
+	}
+	const normalized = Math.floor(value);
+	if (normalized < 1) {
+		return fallback;
+	}
+	return Math.min(normalized, MAX_CONFIG_LIMIT);
+}
+
+function load_completion_performance_settings(): CompletionPerformanceSettings {
+	const config = vscode.workspace.getConfiguration('nicegui');
+	return {
+		maxGeneralCompletions: clamp_positive_int(
+			config.get<number>('performance.maxGeneralCompletions', DEFAULT_MAX_GENERAL_COMPLETIONS),
+			DEFAULT_MAX_GENERAL_COMPLETIONS,
+		),
+		maxIconCompletions: clamp_positive_int(
+			config.get<number>('performance.maxIconCompletions', DEFAULT_MAX_ICON_COMPLETIONS),
+			DEFAULT_MAX_ICON_COMPLETIONS,
+		),
+		maxTailwindCompletions: clamp_positive_int(
+			config.get<number>('performance.maxTailwindCompletions', DEFAULT_MAX_TAILWIND_COMPLETIONS),
+			DEFAULT_MAX_TAILWIND_COMPLETIONS,
+		),
+		maxIconValueCompletions: clamp_positive_int(
+			config.get<number>('performance.maxIconValueCompletions', DEFAULT_MAX_ICON_VALUE_COMPLETIONS),
+			DEFAULT_MAX_ICON_VALUE_COMPLETIONS,
+		),
+		maxAttributeValueCompletions: clamp_positive_int(
+			config.get<number>('performance.maxAttributeValueCompletions', DEFAULT_MAX_ATTR_VALUE_COMPLETIONS),
+			DEFAULT_MAX_ATTR_VALUE_COMPLETIONS,
+		),
+		maxFunctionCompletions: clamp_positive_int(
+			config.get<number>('performance.maxFunctionCompletions', DEFAULT_MAX_FUNCTION_COMPLETIONS),
+			DEFAULT_MAX_FUNCTION_COMPLETIONS,
+		),
+		enableCompletionTimingLog: config.get<boolean>(
+			'performance.enableCompletionTimingLog',
+			DEFAULT_COMPLETION_TIMING_LOG_ENABLED,
+		),
+		completionTimingLogThresholdMs: clamp_positive_int(
+			config.get<number>('performance.completionTimingLogThresholdMs', DEFAULT_COMPLETION_TIMING_THRESHOLD_MS),
+			DEFAULT_COMPLETION_TIMING_THRESHOLD_MS,
+		),
+	};
+}
 
 const cssProperties = [
 	'align-content',
@@ -144,22 +215,40 @@ const cssPropertyValues: Record<string, string[]> = {
 	'white-space': ['normal', 'nowrap', 'pre', 'pre-wrap', 'pre-line'],
 };
 
-function build_completions(list: string[], word: string, wordRange: Range) {
+function build_completions(list: string[], word: string, wordRange: Range, maxItems = DEFAULT_MAX_GENERAL_COMPLETIONS) {
+	if (word === '') {
+		let listCache = emptyCompletionCache.get(list);
+		if (!listCache) {
+			listCache = new Map<number, CompletionItem[]>();
+			emptyCompletionCache.set(list, listCache);
+		}
+		const cached = listCache.get(maxItems);
+		if (cached) {
+			return cached;
+		}
+		const items = list.slice(0, maxItems).map((possible) => new CompletionItem(possible));
+		listCache.set(maxItems, items);
+		return items;
+	}
+
 	const items: CompletionItem[] = [];
 	for (const possible of list) {
-		if (word === '') {
-			items.push(new CompletionItem(possible));
-		} else if (possible.includes(word)) {
+		if (possible.includes(word)) {
 			const item = new CompletionItem(possible);
 			item.range = wordRange;
 			items.push(item);
+			if (items.length >= maxItems) {
+				break;
+			}
 		}
 	}
 	return items;
 }
 
 function capture_ui_function_context(document: TextDocument, position: Position) {
-	const prefix = document.getText().slice(0, document.offsetAt(position));
+	const offset = document.offsetAt(position);
+	const startOffset = Math.max(0, offset - 256);
+	const prefix = document.getText(new Range(document.positionAt(startOffset), position));
 	const result = prefix.match(/\bui\.(\w*)$/);
 	if (!result) {
 		return null;
@@ -222,10 +311,38 @@ function build_style_completions(document: TextDocument, position: Position, sur
 
 export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 	pylance = new PylanceAdapter();
+	private performance = load_completion_performance_settings();
 
 	constructor(private context: ExtensionContext) {
 		const selector = [{ language: 'python', scheme: 'file' }];
 		this.context.subscriptions.push(vscode.languages.registerCompletionItemProvider(selector, this));
+		this.context.subscriptions.push(
+			vscode.workspace.onDidChangeConfiguration((event) => {
+				if (event.affectsConfiguration('nicegui.performance')) {
+					this.performance = load_completion_performance_settings();
+					emptyCompletionCache = new WeakMap();
+				}
+			}),
+		);
+	}
+
+	private maybe_log_completion_timing(
+		startedAt: number,
+		kind: string,
+		status: 'ok' | 'cancelled' | 'error',
+		itemCount: number,
+		triggerKind: number,
+	) {
+		if (!this.performance.enableCompletionTimingLog) {
+			return;
+		}
+		const durationMs = Date.now() - startedAt;
+		if (durationMs < this.performance.completionTimingLogThresholdMs) {
+			return;
+		}
+		console.info(
+			`[NiceGUI][perf] completion ${durationMs}ms status=${status} kind=${kind} items=${itemCount} trigger=${triggerKind}`,
+		);
 	}
 
 	async provideCompletionItems(
@@ -233,176 +350,223 @@ export class NiceGuiCompletionItemProvider implements CompletionItemProvider {
 		position: Position,
 		token: CancellationToken,
 		context: CompletionContext,
-	): Promise<CompletionItem[] | CompletionList<CompletionItem>> {
-		// log.debug('----- provideCompletionItems -----');
-
-		const uiContext = capture_ui_function_context(document, position);
-		if (uiContext) {
-			const items = build_completions(niceguiFunctions, uiContext.word, uiContext.wordRange);
-			for (const item of items) {
-				item.kind = CompletionItemKind.Function;
+	): Promise<CompletionItem[] | CompletionList<CompletionItem> | undefined> {
+		const startedAt = this.performance.enableCompletionTimingLog ? Date.now() : 0;
+		let timingKind = 'unknown';
+		let timingStatus: 'ok' | 'cancelled' | 'error' = 'ok';
+		let timingItemCount = 0;
+		const finish = <T extends CompletionItem[] | CompletionList<CompletionItem> | undefined>(
+			result: T,
+			status: 'ok' | 'cancelled' | 'error' = 'ok',
+		): T => {
+			timingStatus = status;
+			if (Array.isArray(result)) {
+				timingItemCount = result.length;
+			} else {
+				timingItemCount = result?.items?.length ?? 0;
 			}
-			return items;
-		}
+			this.maybe_log_completion_timing(startedAt, timingKind, timingStatus, timingItemCount, context.triggerKind);
+			return result;
+		};
 
-		const ctx = capture_document_context(document, position);
-		// log.debug('context:', ctx);
-
-		if (!ctx) {
-			return undefined;
-		}
-
-		if (ctx.kind === 'icons') {
-			const items = [];
-			for (const icon of materialIcons) {
-				const item = new CompletionItem(icon);
-				items.push(item);
+		try {
+			// log.debug('----- provideCompletionItems -----');
+			const perf = this.performance;
+			if (token.isCancellationRequested) {
+				timingKind = 'cancelled-early';
+				return finish(undefined, 'cancelled');
 			}
-			return items;
-		}
 
-		// ironically, "classes" doesn't rely on knowing the class
-		if (ctx.kind === 'classes') {
-			if (ctx.surround === null) {
-				return undefined;
-			}
-			return build_completions(tailwindClasses, ctx.word, ctx.wordRange);
-		}
-
-		if (ctx.kind === 'style') {
-			if (ctx.surround === null || !ctx.surroundRange) {
-				return undefined;
-			}
-			return build_style_completions(document, position, ctx.surround, ctx.surroundRange);
-		}
-
-		const offset = document.offsetAt(position) - ctx.result[0].length;
-		const className = await this.pylance.determine_class(document, ctx.kind, offset);
-
-		function build_item(name: string, attr: QuasarAttribute) {
-			const label: CompletionItemLabel = {
-				label: name,
-				// detail: '',
-				// description: '',
-			};
-			label.description = flatten(attr.type, ' | ');
-
-			// log.debug(data.returns, data.params, data.returns !== undefined);
-			if (attr.params !== undefined && attr.returns !== undefined) {
-				let params = 'void';
-				if (attr.params !== null) {
-					// const _params: string[] = [];
-					// for (const [param, body] of Object.entries(data.params)) {
-					// 	const type = flatten(body.type, " | ");
-					// 	const p = `${param}: ${type}`;
-					// 	_params.push(p);
-					// }
-
-					// params = _params.join(", ");
-					params = Object.keys(attr.params).join(', ');
+			const uiContext = capture_ui_function_context(document, position);
+			if (uiContext) {
+				timingKind = 'ui-functions';
+				const items = build_completions(
+					niceguiFunctions,
+					uiContext.word,
+					uiContext.wordRange,
+					perf.maxFunctionCompletions,
+				);
+				for (const item of items) {
+					item.kind = CompletionItemKind.Function;
 				}
-				let returns = 'void';
-				if (attr.returns !== null) {
-					returns = Object.keys(attr.returns).join(', ');
-				}
-				label.description = `(${params}) => ${returns}`;
-			} else if (attr.params !== undefined) {
-				let params = 'void';
-				if (attr.returns !== null) {
-					params = Object.keys(attr.params).join(', ');
-				}
-				label.description = `(${params})`;
+				return finish(items);
 			}
 
-			const item = new CompletionItem(label);
+			const ctx = capture_document_context(document, position);
+			// log.debug('context:', ctx);
 
-			if (ctx.kind === 'slots' && name.includes('[')) {
-				const insert = new SnippetString();
-				const parts = name.split('[');
-				insert.appendText(parts[0]);
-				insert.appendPlaceholder(`[${parts[1]}`);
-				item.insertText = insert;
+			if (!ctx) {
+				timingKind = 'none';
+				return finish(undefined);
+			}
+			timingKind = ctx.kind;
+
+			if (ctx.kind === 'icons') {
+				return finish(build_completions(materialIcons, ctx.word, ctx.wordRange, perf.maxIconCompletions));
 			}
 
-			if (ctx.kind === 'props' && attr.type !== 'Boolean') {
-				const insert = new SnippetString();
-				insert.appendText(`${name}=`);
+			// ironically, "classes" doesn't rely on knowing the class
+			if (ctx.kind === 'classes') {
+				if (ctx.surround === null) {
+					return finish(undefined);
+				}
+				return finish(build_completions(tailwindClasses, ctx.word, ctx.wordRange, perf.maxTailwindCompletions));
+			}
+
+			if (ctx.kind === 'style') {
+				if (ctx.surround === null || !ctx.surroundRange) {
+					return finish(undefined);
+				}
+				return finish(build_style_completions(document, position, ctx.surround, ctx.surroundRange));
+			}
+
+			if (token.isCancellationRequested || !ctx.result) {
+				return finish(undefined, 'cancelled');
+			}
+
+			const offset = document.offsetAt(position) - ctx.result[0].length;
+			const className = await this.pylance.determine_class(document, ctx.kind, offset);
+			if (token.isCancellationRequested) {
+				return finish(undefined, 'cancelled');
+			}
+
+			function build_item(name: string, attr: QuasarAttribute) {
+				const label: CompletionItemLabel = {
+					label: name,
+					// detail: '',
+					// description: '',
+				};
+				label.description = flatten(attr.type, ' | ');
+
+				// log.debug(data.returns, data.params, data.returns !== undefined);
+				if (attr.params !== undefined && attr.returns !== undefined) {
+					let params = 'void';
+					if (attr.params !== null) {
+						// const _params: string[] = [];
+						// for (const [param, body] of Object.entries(data.params)) {
+						// 	const type = flatten(body.type, " | ");
+						// 	const p = `${param}: ${type}`;
+						// 	_params.push(p);
+						// }
+
+						// params = _params.join(", ");
+						params = Object.keys(attr.params).join(', ');
+					}
+					let returns = 'void';
+					if (attr.returns !== null) {
+						returns = Object.keys(attr.returns).join(', ');
+					}
+					label.description = `(${params}) => ${returns}`;
+				} else if (attr.params !== undefined) {
+					let params = 'void';
+					if (attr.returns !== null) {
+						params = Object.keys(attr.params).join(', ');
+					}
+					label.description = `(${params})`;
+				}
+
+				const item = new CompletionItem(label);
+
+				if (ctx.kind === 'slots' && name.includes('[')) {
+					const insert = new SnippetString();
+					const parts = name.split('[');
+					insert.appendText(parts[0]);
+					insert.appendPlaceholder(`[${parts[1]}`);
+					item.insertText = insert;
+				}
+
+				if (ctx.kind === 'props' && attr.type !== 'Boolean') {
+					const insert = new SnippetString();
+					insert.appendText(`${name}=`);
+					if (attr.values) {
+						insert.appendChoice(attr.values.map((v) => v.slice(1, -1)));
+					}
+					item.insertText = insert;
+				}
+
+				const doc = new MarkdownString();
+				doc.appendText(attr.desc);
+				if (attr.examples) {
+					let mk = '\n\n---\n\n';
+					mk += 'Examples:\n';
+					for (const ex of attr.examples) {
+						mk += ` - ${ex.replace('#', '\\#')}\n`;
+					}
+					doc.appendMarkdown(mk);
+				}
 				if (attr.values) {
-					insert.appendChoice(attr.values.map((v) => v.slice(1, -1)));
+					let mk = '\n\n---\n\n';
+					mk += 'Values:\n\n';
+					for (const val of attr.values) {
+						mk += ` - ${val.replace('#', '\\#')}\n`;
+					}
+					mk += '\n';
+					doc.appendMarkdown(mk);
 				}
-				item.insertText = insert;
-			}
-
-			const doc = new MarkdownString();
-			doc.appendText(attr.desc);
-			if (attr.examples) {
-				let mk = '\n\n---\n\n';
-				mk += 'Examples:\n';
-				for (const ex of attr.examples) {
-					mk += ` - ${ex.replace('#', '\\#')}\n`;
+				item.documentation = doc;
+				if (ctx.word !== '') {
+					item.range = ctx.wordRange;
 				}
-				doc.appendMarkdown(mk);
+				return item;
 			}
-			if (attr.values) {
-				let mk = '\n\n---\n\n';
-				mk += 'Values:\n\n';
-				for (const val of attr.values) {
-					mk += ` - ${val.replace('#', '\\#')}\n`;
-				}
-				mk += '\n';
-				doc.appendMarkdown(mk);
-			}
-			item.documentation = doc;
-			if (ctx.word !== '') {
-				item.range = ctx.wordRange;
-			}
-			return item;
-		}
 
-		const items = [];
+			const items: CompletionItem[] = [];
+			const classData = quasarData[className];
 
-		const classData = quasarData[className];
-
-		function build_items(kind: 'props' | 'slots' | 'events' | 'methods') {
-			if (ctx.word.includes('=')) {
-				const word = ctx.word.split('=')[0];
-				if (['icon', 'icon-right'].includes(word)) {
-					for (const icon of materialIcons) {
-						const item = new CompletionItem(icon);
+			function build_items(kind: 'props' | 'slots' | 'events' | 'methods') {
+				if (ctx.word.includes('=')) {
+					const word = ctx.word.split('=')[0];
+					if (['icon', 'icon-right'].includes(word)) {
+						const rawTypedIcon = ctx.word.split('=').slice(1).join('=').replace(/^['"]/, '').toLowerCase();
+						for (const icon of materialIcons) {
+							if (rawTypedIcon && !icon.toLowerCase().includes(rawTypedIcon)) {
+								continue;
+							}
+							const item = new CompletionItem(icon);
+							items.push(item);
+							if (items.length >= perf.maxIconValueCompletions) {
+								break;
+							}
+						}
+						return;
+					}
+					const attr = classData?.[kind]?.[word];
+					if (!attr) {
+						return;
+					}
+					for (const value of attr.values ?? []) {
+						const item = new CompletionItem(value.slice(1, -1));
 						items.push(item);
+						if (items.length >= perf.maxAttributeValueCompletions) {
+							break;
+						}
 					}
 					return;
 				}
-				const attr = classData?.[kind]?.[word];
-				if (!attr) {
-					return;
-				}
-				for (const value of attr.values ?? []) {
-					const item = new CompletionItem(value.slice(1, -1));
-					items.push(item);
-				}
-				return;
-			}
-			for (const [name, attr] of Object.entries(classData[kind] ?? {})) {
-				if (attr.internal) {
-					continue;
-				}
-				if (ctx.word === '' || name.includes(ctx.word)) {
-					const item = build_item(name, attr);
-					items.push(item);
+				for (const [name, attr] of Object.entries(classData[kind] ?? {})) {
+					if (attr.internal) {
+						continue;
+					}
+					if (ctx.word === '' || name.includes(ctx.word)) {
+						const item = build_item(name, attr);
+						items.push(item);
+					}
 				}
 			}
-		}
 
-		if (classData) {
-			// log.debug('using quasar metadata');
-			build_items(ctx.kind);
-		} else {
-			// log.debug('using full lists');
-			items.push(...build_completions(quasarLists[ctx.kind], ctx.word, ctx.wordRange));
-		}
+			if (classData) {
+				// log.debug('using quasar metadata');
+				build_items(ctx.kind);
+			} else {
+				// log.debug('using full lists');
+				items.push(...build_completions(quasarLists[ctx.kind], ctx.word, ctx.wordRange, perf.maxGeneralCompletions));
+			}
 
-		// log.debug("found ", items.length);
-		return items;
+			// log.debug("found ", items.length);
+			return finish(items);
+		} catch (error) {
+			log.error('Completion provider failed', error);
+			return finish(undefined, 'error');
+		}
 	}
 }

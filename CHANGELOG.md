@@ -1,5 +1,29 @@
 # Changelog
 
+### 0.9.9
+
+- Fix Pylance connection race in hover/completion integration (avoid `_connection` null crash during startup)
+- Improve provider resilience:
+  - add cancellation checks and guarded fallbacks in completion/hover providers
+  - avoid provider hard-fail on transient errors
+- Reduce CPU and memory spikes in completions:
+  - cap maximum completion items returned for large lists (icons, tailwind, generic values, `ui.*`)
+  - add bounded caches for repeated completion item lists and Pylance class/hover lookups
+  - reduce document context scan window in hot paths
+- Add new performance settings:
+  - `nicegui.performance.maxGeneralCompletions`
+  - `nicegui.performance.maxIconCompletions`
+  - `nicegui.performance.maxTailwindCompletions`
+  - `nicegui.performance.maxIconValueCompletions`
+  - `nicegui.performance.maxAttributeValueCompletions`
+  - `nicegui.performance.maxFunctionCompletions`
+  - `nicegui.performance.enableCompletionTimingLog`
+  - `nicegui.performance.completionTimingLogThresholdMs`
+- Improve preview and command robustness:
+  - reuse preview webview panel instead of creating many retained panels
+  - validate preview URL
+  - guard against missing active editor in switch command
+
 ### 0.9.8
 
 - Fix extension activation crash: `Cannot read properties of undefined (reading 'extensionUri')`

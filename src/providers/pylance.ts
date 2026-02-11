@@ -7,8 +7,29 @@ export interface TextDocumentPositionParams {
 	position: Position;
 }
 
+interface PylanceConnection {
+	sendRequest(method: string, params: unknown): Promise<unknown>;
+}
+
 export class PylanceAdapter {
 	pylance = vscode.extensions.getExtension('ms-python.vscode-pylance');
+	private hoverCache = new Map<string, string | null>();
+	private classCache = new Map<string, string | null>();
+	private readonly hoverCacheLimit = 512;
+	private readonly classCacheLimit = 512;
+
+	private set_bounded_cache<T>(cache: Map<string, T>, key: string, value: T, maxSize: number) {
+		if (cache.has(key)) {
+			cache.delete(key);
+		}
+		cache.set(key, value);
+		if (cache.size > maxSize) {
+			const firstKey = cache.keys().next().value;
+			if (firstKey !== undefined) {
+				cache.delete(firstKey);
+			}
+		}
+	}
 
 	private normalize_hover_contents(contents: unknown): string | null {
 		if (!contents) {
@@ -57,55 +78,91 @@ export class PylanceAdapter {
 	}
 
 	async get_client() {
-		if (!this.pylance?.isActive) {
+		if (!this.pylance) {
 			return null;
 		}
-		return await this.pylance.exports.client.getClient();
+		try {
+			if (!this.pylance.isActive) {
+				await this.pylance.activate();
+			}
+			return await this.pylance.exports?.client?.getClient?.();
+		} catch {
+			return null;
+		}
+	}
+
+	private async get_connection(): Promise<PylanceConnection | null> {
+		const client = await this.get_client();
+		const connection = client?._connection;
+		if (!connection || typeof connection.sendRequest !== 'function') {
+			return null;
+		}
+		return connection;
 	}
 
 	async send_request(method: string, params) {
-		if (!this.pylance?.isActive) {
+		const connection = await this.get_connection();
+		if (!connection) {
 			return null;
 		}
-		const client = await this.pylance.exports.client.getClient();
-
-		return await client._connection.sendRequest(method, params);
+		try {
+			return await connection.sendRequest(method, params);
+		} catch {
+			return null;
+		}
 	}
 
 	async request_hover(document: TextDocument, position: Position): Promise<string | null> {
+		const cacheKey = `${document.uri.toString()}#${document.version}:${position.line}:${position.character}`;
+		if (this.hoverCache.has(cacheKey)) {
+			return this.hoverCache.get(cacheKey) ?? null;
+		}
+
 		const location: TextDocumentPositionParams = {
 			textDocument: { uri: document.uri.toString() },
 			position: position,
 		};
-		const response = await this.send_request('textDocument/hover', location);
-		return this.normalize_hover_contents(response?.contents);
+		const response = (await this.send_request('textDocument/hover', location)) as { contents?: unknown } | null;
+		const normalized = this.normalize_hover_contents(response?.contents);
+		this.set_bounded_cache(this.hoverCache, cacheKey, normalized, this.hoverCacheLimit);
+		return normalized;
 	}
 
 	async request_type(document: TextDocument, position: Position): Promise<string | null> {
-		if (!this.pylance?.isActive) {
+		const connection = await this.get_connection();
+		if (!connection) {
 			return null;
 		}
-		const client = await this.pylance.exports.client.getClient();
-
-		const response = await client._connection.sendRequest('textDocument/typeDefinition', {
-			textDocument: { uri: document.uri.toString() },
-			position: {
-				line: position.line,
-				character: position.character,
-			},
-		});
-		return response;
+		try {
+			const response = await connection.sendRequest('textDocument/typeDefinition', {
+				textDocument: { uri: document.uri.toString() },
+				position: {
+					line: position.line,
+					character: position.character,
+				},
+			});
+			return response as string | null;
+		} catch {
+			return null;
+		}
 	}
 
 	async determine_class(document: TextDocument, kind: string, offset: number): Promise<string | null> {
+		const cacheKey = `${document.uri.toString()}#${document.version}:${kind}:${offset}`;
+		if (this.classCache.has(cacheKey)) {
+			return this.classCache.get(cacheKey) ?? null;
+		}
+
 		const possibleClass = await this._determine_class(document, kind, offset);
 		if (!possibleClass) {
+			this.set_bounded_cache(this.classCache, cacheKey, null, this.classCacheLimit);
 			return null;
 		}
 
 		// Prefer exact mappings extracted from installed NiceGUI.
 		const mappedClass = niceguiToQuasarMap[possibleClass];
 		if (mappedClass) {
+			this.set_bounded_cache(this.classCache, cacheKey, mappedClass, this.classCacheLimit);
 			return mappedClass;
 		}
 
@@ -113,7 +170,9 @@ export class PylanceAdapter {
 		let className = `Q${possibleClass}`;
 		className = className.replace('Button', 'Btn');
 		className = className.replace('Image', 'Img');
-		return className.toLowerCase();
+		const normalized = className.toLowerCase();
+		this.set_bounded_cache(this.classCache, cacheKey, normalized, this.classCacheLimit);
+		return normalized;
 	}
 
 	async _determine_class(document: TextDocument, kind: string, offset: number) {

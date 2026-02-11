@@ -2,8 +2,7 @@
 	"name": "nicegui-3",
 	"displayName": "NiceGUI 3",
 	"icon": "icon.png",
-	"version": "0.9.8",
-	"version": "0.9.8",
+	"version": "0.9.9",
 	"description": "Language support for the NiceGUI framework",
 	"repository": {
 		"type": "git",
@@ -48,6 +47,60 @@
 					"type": "string",
 					"default": "http://localhost:8080",
 					"description": "The target URL for the NiceGUI preview"
+				},
+				"nicegui.performance.maxGeneralCompletions": {
+					"type": "number",
+					"default": 300,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of general completion items returned per request."
+				},
+				"nicegui.performance.maxIconCompletions": {
+					"type": "number",
+					"default": 300,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of icon completion items returned per request."
+				},
+				"nicegui.performance.maxTailwindCompletions": {
+					"type": "number",
+					"default": 300,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of tailwind class completion items returned per request."
+				},
+				"nicegui.performance.maxIconValueCompletions": {
+					"type": "number",
+					"default": 200,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of icon value suggestions returned for props like icon=."
+				},
+				"nicegui.performance.maxAttributeValueCompletions": {
+					"type": "number",
+					"default": 200,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of attribute value completion items returned per request."
+				},
+				"nicegui.performance.maxFunctionCompletions": {
+					"type": "number",
+					"default": 200,
+					"minimum": 1,
+					"maximum": 2000,
+					"description": "Maximum number of ui.* function completion items returned per request."
+				},
+				"nicegui.performance.enableCompletionTimingLog": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable timing logs for completion requests in the Extension Host log."
+				},
+				"nicegui.performance.completionTimingLogThresholdMs": {
+					"type": "number",
+					"default": 20,
+					"minimum": 1,
+					"maximum": 10000,
+					"description": "Only log completion timing when duration is at least this many milliseconds."
 				}
 			}
 		},
