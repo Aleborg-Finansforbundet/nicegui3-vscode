@@ -1,6 +1,6 @@
 {
-	"name": "nicegui-3",
-	"displayName": "NiceGUI 3",
+	"name": "nicegui",
+	"displayName": "NiceGUI",
 	"icon": "icon.png",
 	"version": "0.10.0",
 	"description": "Language support for the NiceGUI framework",
@@ -36,7 +36,7 @@
 	"contributes": {
 		"configuration": {
 			"type": "object",
-			"title": "NiceGUI 3",
+			"title": "NiceGUI",
 			"properties": {
 				"nicegui.enableStringSuggestions": {
 					"type": "boolean",
